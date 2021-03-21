@@ -31,6 +31,7 @@
 #include <linux/pci.h>
 #include <linux/scatterlist.h>
 #include <linux/vmalloc.h>
+#include <linux/msm_dma_iommu_mapping.h>
 
 #define IOMMU_MAPPING_ERROR	0
 
@@ -190,15 +191,15 @@ static int cookie_init_hw_msi_region(struct iommu_dma_cookie *cookie,
 	start -= iova_offset(iovad, start);
 	num_pages = iova_align(iovad, end - start) >> iova_shift(iovad);
 
-	msi_page = kcalloc(num_pages, sizeof(*msi_page), GFP_KERNEL);
-	if (!msi_page)
-		return -ENOMEM;
-
 	for (i = 0; i < num_pages; i++) {
-		msi_page[i].phys = start;
-		msi_page[i].iova = start;
-		INIT_LIST_HEAD(&msi_page[i].list);
-		list_add(&msi_page[i].list, &cookie->msi_page_list);
+		msi_page = kmalloc(sizeof(*msi_page), GFP_KERNEL);
+		if (!msi_page)
+			return -ENOMEM;
+
+		msi_page->phys = start;
+		msi_page->iova = start;
+		INIT_LIST_HEAD(&msi_page->list);
+		list_add(&msi_page->list, &cookie->msi_page_list);
 		start += iovad->granule;
 	}
 
@@ -357,6 +358,7 @@ int iommu_dma_enable_best_fit_algo(struct device *dev)
 	iovad->best_fit = true;
 	return 0;
 }
+EXPORT_SYMBOL(iommu_dma_enable_best_fit_algo);
 
 /**
  * dma_info_to_prot - Translate DMA API directions and attributes to IOMMU API
@@ -856,15 +858,21 @@ int iommu_dma_map_sg(struct device *dev, struct scatterlist *sg,
 	iova_len = iommu_dma_prepare_map_sg(dev, iovad, sg, nents);
 
 	iova = iommu_dma_alloc_iova(domain, iova_len, dma_get_mask(dev), dev);
-	if (!iova)
+	if (!iova) {
+		pr_err("DEBUG: Alloc iova failed for len 0x%zx\n", iova_len);
+		msm_dma_debug_count_buffers(dev);
 		goto out_restore_sg;
+	}
 
 	/*
 	 * We'll leave any physical concatenation to the IOMMU driver's
 	 * implementation - it knows better than we do.
 	 */
-	if (iommu_map_sg(domain, iova, sg, nents, prot) < iova_len)
+	if (iommu_map_sg(domain, iova, sg, nents, prot) < iova_len) {
+		pr_err("DEBUG: Map failed for DMAADDR=0x%pad\n", iova);
+		msm_dma_debug_count_buffers(dev);
 		goto out_free_iova;
+	}
 
 	return iommu_dma_finalise_sg(dev, sg, nents, iova);
 

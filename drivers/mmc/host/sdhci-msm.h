@@ -104,6 +104,8 @@ struct sdhci_msm_slot_reg_data {
 	struct sdhci_msm_reg_data *vdd_data;
 	 /* keeps VDD IO regulator info */
 	struct sdhci_msm_reg_data *vdd_io_data;
+	 /* Keeps VDD IO parent regulator info*/
+	struct sdhci_msm_reg_data *vdd_io_bias_data;
 };
 
 struct sdhci_msm_gpio {
@@ -265,17 +267,9 @@ struct sdhci_msm_debug_data {
 	struct sdhci_host copy_host;
 };
 
-struct sdhci_msm_ice_data {
-	struct qcom_ice_variant_ops *vops;
-	struct platform_device *pdev;
-	int state;
-};
-
 struct sdhci_msm_host {
 	struct platform_device	*pdev;
 	void __iomem *core_mem;    /* MSM SDCC mapped address */
-	void __iomem *cryptoio;    /* ICE HCI mapped address */
-	bool ice_hci_support;
 	int	pwr_irq;	/* power irq */
 	struct clk	 *clk;     /* main SD/MMC bus clock */
 	struct clk	 *pclk;    /* SDHC peripheral bus clock */
@@ -323,11 +317,11 @@ struct sdhci_msm_host {
 	bool core_3_0v_support;
 	bool pltfm_init_done;
 	struct sdhci_msm_regs_restore regs_restore;
+	u8 phase_on_tuning;
 	bool use_7nm_dll;
 	int soc_min_rev;
 	struct workqueue_struct *pm_qos_wq;
 	struct sdhci_msm_dll_hsr *dll_hsr;
-	struct sdhci_msm_ice_data ice;
 	u32 ice_clk_rate;
 	bool debug_mode_enabled;
 	bool reg_store;

@@ -1,6 +1,6 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
 /*
- * Copyright (c) 2012-2019, The Linux Foundation. All rights reserved.
+ * Copyright (c) 2012-2020, The Linux Foundation. All rights reserved.
  */
 
 #ifndef __QCOM_ADC_TM_H__
@@ -164,6 +164,7 @@ struct adc_tm_data {
 
 extern const struct adc_tm_data data_adc_tm5;
 extern const struct adc_tm_data data_adc_tm7;
+extern const struct adc_tm_data data_adc_tm_rev2;
 
 /**
  * Channel index for the corresponding index to adc_tm_channel_select
@@ -306,5 +307,10 @@ void adc_tm_scale_therm_voltage_100k_adc7(struct adc_tm_config *param);
 int32_t adc_tm_absolute_rthr_adc7(struct adc_tm_config *tm_config);
 
 int adc_tm_is_valid(struct adc_tm_chip *chip);
+
+#ifdef CONFIG_SEC_EXT_THERMAL_MONITOR
+int sec_bat_convert_adc_to_temp(unsigned int adc_ch, int temp_adc);
+int sec_bat_get_thr_voltage(unsigned int adc_ch, int temp);
+#endif /* CONFIG_SEC_EXT_THERMAL_MONITOR */
 
 #endif /* __QCOM_ADC_TM_H__ */

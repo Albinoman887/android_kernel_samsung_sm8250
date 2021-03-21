@@ -35,6 +35,9 @@
 #include "pcm.h"
 #include "clock.h"
 #include "power.h"
+#ifdef CONFIG_USB_NOTIFY_PROC_LOG
+#include <linux/usb_notify.h>
+#endif
 
 #define SUBSTREAM_FLAG_DATA_EP_STARTED	0
 #define SUBSTREAM_FLAG_SYNC_EP_STARTED	1
@@ -442,7 +445,7 @@ static int set_sync_ep_implicit_fb_quirk(struct snd_usb_substream *subs,
 add_sync_ep_from_ifnum:
 	iface = usb_ifnum_to_if(dev, ifnum);
 
-	if (!iface || iface->num_altsetting == 0)
+	if (!iface || iface->num_altsetting < 2)
 		return -EINVAL;
 
 	alts = &iface->altsetting[1];
@@ -578,15 +581,15 @@ static int set_format(struct snd_usb_substream *subs, struct audioformat *fmt)
 	if (WARN_ON(!iface))
 		return -EINVAL;
 	alts = usb_altnum_to_altsetting(iface, fmt->altsetting);
-	altsd = get_iface_desc(alts);
-	if (WARN_ON(altsd->bAlternateSetting != fmt->altsetting))
+	if (WARN_ON(!alts))
 		return -EINVAL;
+	altsd = get_iface_desc(alts);
 
-	if (fmt == subs->cur_audiofmt)
+	if (fmt == subs->cur_audiofmt && !subs->need_setup_fmt)
 		return 0;
 
 	/* close the old interface */
-	if (subs->interface >= 0 && subs->interface != fmt->iface) {
+	if (subs->interface >= 0 && (subs->interface != fmt->iface || subs->need_setup_fmt)) {
 		if (!subs->stream->chip->keep_iface) {
 			err = usb_set_interface_timeout(subs->dev,
 				subs->interface, 0, MAX_SETALT_TIMEOUT_MS);
@@ -600,6 +603,9 @@ static int set_format(struct snd_usb_substream *subs, struct audioformat *fmt)
 		subs->interface = -1;
 		subs->altset_idx = 0;
 	}
+
+	if (subs->need_setup_fmt)
+		subs->need_setup_fmt = false;
 
 	/* set interface */
 	if (iface->cur_altsetting != alts) {
@@ -653,6 +659,9 @@ int snd_usb_enable_audio_stream(struct snd_usb_substream *subs,
 	struct usb_host_interface *alts;
 	struct usb_interface *iface;
 	int ret;
+#ifdef CONFIG_USB_NOTIFY_PROC_LOG
+	int on, type;
+#endif
 
 	if (!enable) {
 		if (subs->interface >= 0) {
@@ -664,6 +673,14 @@ int snd_usb_enable_audio_stream(struct snd_usb_substream *subs,
 		}
 
 		snd_usb_autosuspend(subs->stream->chip);
+#ifdef CONFIG_USB_NOTIFY_PROC_LOG
+		if (subs->direction == SNDRV_PCM_STREAM_PLAYBACK)
+			type = NOTIFY_PCM_PLAYBACK;
+		else
+			type = NOTIFY_PCM_CAPTURE;
+		on = 0;
+		store_usblog_notify(type, (void *)&on, NULL);
+#endif
 		return 0;
 	}
 
@@ -715,6 +732,15 @@ int snd_usb_enable_audio_stream(struct snd_usb_substream *subs,
 
 	subs->interface = fmt->iface;
 	subs->altset_idx = fmt->altset_idx;
+
+#ifdef CONFIG_USB_NOTIFY_PROC_LOG
+	if (subs->direction == SNDRV_PCM_STREAM_PLAYBACK)
+		type = NOTIFY_PCM_PLAYBACK;
+	else
+		type = NOTIFY_PCM_CAPTURE;
+	on = 1;
+	store_usblog_notify(type, (void *)&on, NULL);
+#endif
 
 	return 0;
 }
@@ -1864,6 +1890,13 @@ static int snd_usb_substream_playback_trigger(struct snd_pcm_substream *substrea
 		subs->data_endpoint->retire_data_urb = retire_playback_urb;
 		subs->running = 0;
 		return 0;
+	case SNDRV_PCM_TRIGGER_SUSPEND:
+		if (subs->stream->chip->setup_fmt_after_resume_quirk) {
+			stop_endpoints(subs, true);
+			subs->need_setup_fmt = true;
+			return 0;
+		}
+		break;
 	}
 
 	return -EINVAL;
@@ -1896,6 +1929,13 @@ static int snd_usb_substream_capture_trigger(struct snd_pcm_substream *substream
 		subs->data_endpoint->retire_data_urb = retire_capture_urb;
 		subs->running = 1;
 		return 0;
+	case SNDRV_PCM_TRIGGER_SUSPEND:
+		if (subs->stream->chip->setup_fmt_after_resume_quirk) {
+			stop_endpoints(subs, true);
+			subs->need_setup_fmt = true;
+			return 0;
+		}
+		break;
 	}
 
 	return -EINVAL;

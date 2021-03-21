@@ -9,6 +9,8 @@
 
 #include <linux/interrupt.h>
 
+#include <trace/events/sched.h>
+
 #include "walt.h"
 
 int sched_rr_timeslice = RR_TIMESLICE;
@@ -927,9 +929,10 @@ static void dump_throttled_rt_tasks(struct rt_rq *rt_rq)
 		rt_rq, cpu_of(rq_of_rt_rq(rt_rq)));
 
 	pos += snprintf(pos, end - pos,
-			"rt_period_timer: expires=%lld now=%llu period=%llu\n",
+			"rt_period_timer: expires=%lld now=%llu runtime=%llu period=%llu\n",
 			hrtimer_get_expires_ns(&rt_b->rt_period_timer),
-			ktime_get_ns(), sched_rt_period(rt_rq));
+			ktime_get_ns(), sched_rt_runtime(rt_rq),
+			sched_rt_period(rt_rq));
 
 	if (bitmap_empty(array->bitmap, MAX_RT_PRIO))
 		goto out;
@@ -1759,6 +1762,9 @@ static int rt_energy_aware_wake_cpu(struct task_struct *task)
 	struct sched_domain *sd;
 	struct sched_group *sg;
 	struct cpumask *lowest_mask = this_cpu_cpumask_var_ptr(local_cpu_mask);
+#ifdef CONFIG_PERF_MGR
+	struct cpumask tmp_mask;
+#endif
 	int cpu, best_cpu = -1;
 	unsigned long best_capacity = ULONG_MAX;
 	unsigned long util, best_cpu_util = ULONG_MAX;
@@ -1768,6 +1774,9 @@ static int rt_energy_aware_wake_cpu(struct task_struct *task)
 	int best_cpu_idle_idx = INT_MAX;
 	int cpu_idle_idx = -1;
 	bool boost_on_big = rt_boost_on_big();
+#ifdef CONFIG_PERF_MGR
+	boost_on_big = boost_on_big || task->drawing_mig_boost;
+#endif
 
 	rcu_read_lock();
 
@@ -1786,14 +1795,25 @@ retry:
 		int capacity_orig = capacity_orig_of(fcpu);
 
 		if (boost_on_big) {
-			if (is_min_capacity_cpu(fcpu))
+			if (is_min_capacity_cpu(fcpu)){
 				continue;
+			}else{
+#ifdef CONFIG_PERF_MGR
+				if (task->drawing_mig_boost){
+					cpumask_or(&tmp_mask, &tmp_mask, sched_group_span(sg));
+					lowest_mask = &tmp_mask;
+				}
+#endif
+			}
 		} else {
 			if (capacity_orig > best_capacity)
 				continue;
 		}
 
 		for_each_cpu_and(cpu, lowest_mask, sched_group_span(sg)) {
+
+			trace_sched_cpu_util(cpu);
+
 			if (cpu_isolated(cpu))
 				continue;
 
@@ -1801,9 +1821,19 @@ retry:
 				continue;
 
 			util = cpu_util(cpu);
-
-			if (__cpu_overutilized(cpu, util + tutil))
+#ifdef CONFIG_PERF_MGR
+			if (task->drawing_mig_boost){
+				if (capacity_orig_of(cpu) < util + tutil){
+					continue;
+				}
+			}else{
+				if (__cpu_overutilized(cpu, tutil))
+					continue;
+			}
+#else
+			if (__cpu_overutilized(cpu, tutil))
 				continue;
+#endif
 
 			/* Find the least loaded CPU */
 			if (util > best_cpu_util)
@@ -1886,9 +1916,13 @@ static int find_lowest_rq(struct task_struct *task)
 	 * We prioritize the last CPU that the task executed on since
 	 * it is most likely cache-hot in that location.
 	 */
+#ifdef CONFIG_PERF_MGR
+	if ( task->drawing_mig_boost || cpumask_test_cpu(cpu, lowest_mask))
+		return cpu;
+#else
 	if (cpumask_test_cpu(cpu, lowest_mask))
 		return cpu;
-
+#endif
 	/*
 	 * Otherwise, we consult the sched_domains span maps to figure
 	 * out which CPU is logically closest to our hot cache data.
@@ -1942,7 +1976,7 @@ static struct rq *find_lock_lowest_rq(struct task_struct *task, struct rq *rq)
 	struct rq *lowest_rq = NULL;
 	int tries;
 	int cpu;
-
+	bool cpu_allow_check = true;
 	for (tries = 0; tries < RT_MAX_TRIES; tries++) {
 		cpu = find_lowest_rq(task);
 
@@ -1969,8 +2003,13 @@ static struct rq *find_lock_lowest_rq(struct task_struct *task, struct rq *rq)
 			 * migrated already or had its affinity changed.
 			 * Also make sure that it wasn't scheduled on its rq.
 			 */
+			cpu_allow_check = cpumask_test_cpu(lowest_rq->cpu, &task->cpus_allowed);
+#ifdef CONFIG_PERF_MGR
+			if(task->drawing_mig_boost)
+				cpu_allow_check = cpu_active(cpu);
+#endif
 			if (unlikely(task_rq(task) != rq ||
-				     !cpumask_test_cpu(lowest_rq->cpu, &task->cpus_allowed) ||
+				     !cpu_allow_check ||
 				     task_running(rq, task) ||
 				     !rt_task(task) ||
 				     !task_on_rq_queued(task))) {
@@ -2633,6 +2672,10 @@ const struct sched_class rt_sched_class = {
 	.update_curr		= update_curr_rt,
 #ifdef CONFIG_SCHED_WALT
 	.fixup_walt_sched_stats	= fixup_walt_sched_stats_common,
+#endif
+
+#ifdef CONFIG_UCLAMP_TASK
+	.uclamp_enabled		= 1,
 #endif
 };
 

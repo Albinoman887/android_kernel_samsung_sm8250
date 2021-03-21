@@ -15,6 +15,7 @@
 #include <linux/stat.h>
 #include <linux/string.h>
 #include <linux/types.h>
+#include <linux/bug.h>
 
 #include <asm/system_misc.h>
 
@@ -295,6 +296,9 @@ static struct msm_soc_info cpu_of_id[] = {
 	[305] = {MSM_CPU_8996, "MSM8996pro"},
 	[312] = {MSM_CPU_8996, "APQ8096pro"},
 
+	/* SDM660 ID */
+	[317] = {MSM_CPU_SDM660, "SDM660"},
+
 	/* sm8150 ID */
 	[339] = {MSM_CPU_SM8150, "SM8150"},
 
@@ -318,9 +322,14 @@ static struct msm_soc_info cpu_of_id[] = {
 
 	/* kona ID */
 	[356] = {MSM_CPU_KONA, "KONA"},
+	[455] = {MSM_CPU_KONA, "KONA"},
 
 	/* Lito ID */
 	[400] = {MSM_CPU_LITO, "LITO"},
+	[440] = {MSM_CPU_LITO, "LITO"},
+
+	/* Orchid ID */
+	[476] = {MSM_CPU_ORCHID, "ORCHID"},
 
 	/* Bengal ID */
 	[417] = {MSM_CPU_BENGAL, "BENGAL"},
@@ -332,9 +341,21 @@ static struct msm_soc_info cpu_of_id[] = {
 
 	/* Bengalp ID */
 	[445] = {MSM_CPU_BENGALP, "BENGALP"},
+	[420] = {MSM_CPU_BENGALP, "BENGALP"},
 
 	/* Scuba ID */
 	[441] = {MSM_CPU_SCUBA, "SCUBA"},
+	[471] = {MSM_CPU_SCUBA, "SCUBA"},
+
+	/* Scuba IIOT  ID */
+	[473] = {MSM_CPU_SCUBAIOT, "SCUBAIIOT"},
+	[474] = {MSM_CPU_SCUBAPIOT, "SCUBAPIIOT"},
+
+	/* BENGAL-IOT ID */
+	[469] = {MSM_CPU_BENGAL_IOT, "BENGAL-IOT"},
+
+	/* BENGALP-IOT ID */
+	[470] = {MSM_CPU_BENGALP_IOT, "BENGALP-IOT"},
 
 	/* Uninitialized IDs are not known to run Linux.
 	 * MSM_CPU_UNKNOWN is set to 0 to ensure these IDs are
@@ -629,6 +650,18 @@ msm_get_vendor(struct device *dev,
 		struct device_attribute *attr,
 		char *buf)
 {
+	return snprintf(buf, PAGE_SIZE, "Qualcomm Technologies, Inc\n");
+}
+
+static ssize_t
+msm_get_crash(struct device *dev,
+		struct device_attribute *attr,
+		char *buf)
+{
+	pr_err("intentional cdsp runtime failed! comment out-just footprint!\n");
+#ifndef CONFIG_SEC_CDSP_NOT_CRASH_ENG
+	BUG_ON(1);
+#endif /* CONFIG_SEC_CDSP_NOT_CRASH_ENG */
 	return snprintf(buf, PAGE_SIZE, "Qualcomm Technologies, Inc\n");
 }
 
@@ -1068,6 +1101,9 @@ static struct device_attribute msm_soc_attr_raw_id =
 static struct device_attribute msm_soc_attr_vendor =
 	__ATTR(vendor, 0444, msm_get_vendor,  NULL);
 
+static struct device_attribute msm_soc_attr_crash =
+	__ATTR(crash, 0444, msm_get_crash,  NULL);
+
 static struct device_attribute msm_soc_attr_build_id =
 	__ATTR(build_id, 0444, msm_get_build_id, NULL);
 
@@ -1187,6 +1223,10 @@ static void * __init setup_dummy_socinfo(void)
 		dummy_socinfo.id = 310;
 		strlcpy(dummy_socinfo.build_id, "msm8996-auto - ",
 		sizeof(dummy_socinfo.build_id));
+	} else if (early_machine_is_sdm660()) {
+		dummy_socinfo.id = 317;
+		strlcpy(dummy_socinfo.build_id, "sdm660 - ",
+		sizeof(dummy_socinfo.build_id));
 	} else if (early_machine_is_sm8150()) {
 		dummy_socinfo.id = 339;
 		strlcpy(dummy_socinfo.build_id, "sm8150 - ",
@@ -1203,6 +1243,10 @@ static void * __init setup_dummy_socinfo(void)
 		dummy_socinfo.id = 400;
 		strlcpy(dummy_socinfo.build_id, "lito - ",
 		sizeof(dummy_socinfo.build_id));
+	} else if (early_machine_is_orchid()) {
+		dummy_socinfo.id = 476;
+		strlcpy(dummy_socinfo.build_id, "orchid - ",
+		sizeof(dummy_socinfo.build_id));
 	} else if (early_machine_is_bengal()) {
 		dummy_socinfo.id = 417;
 		strlcpy(dummy_socinfo.build_id, "bengal - ",
@@ -1218,6 +1262,14 @@ static void * __init setup_dummy_socinfo(void)
 	} else if (early_machine_is_scuba()) {
 		dummy_socinfo.id = 441;
 		strlcpy(dummy_socinfo.build_id, "scuba - ",
+		sizeof(dummy_socinfo.build_id));
+	} else if (early_machine_is_scubaiot()) {
+		dummy_socinfo.id = 473;
+		strlcpy(dummy_socinfo.build_id, "scubaiot - ",
+		sizeof(dummy_socinfo.build_id));
+	} else if (early_machine_is_scubapiot()) {
+		dummy_socinfo.id = 474;
+		strlcpy(dummy_socinfo.build_id, "scubapiot - ",
 		sizeof(dummy_socinfo.build_id));
 	} else if (early_machine_is_sdmshrike()) {
 		dummy_socinfo.id = 340;
@@ -1239,6 +1291,14 @@ static void * __init setup_dummy_socinfo(void)
 		dummy_socinfo.id = 365;
 		strlcpy(dummy_socinfo.build_id, "sdmmagpie - ",
 		sizeof(dummy_socinfo.build_id));
+	} else if (early_machine_is_bengal_iot()) {
+		dummy_socinfo.id = 469;
+		strlcpy(dummy_socinfo.build_id, "bengal-iot - ",
+		sizeof(dummy_socinfo.build_id));
+	} else if (early_machine_is_bengalp_iot()) {
+		dummy_socinfo.id = 470;
+		strlcpy(dummy_socinfo.build_id, "bengalp-iot - ",
+		sizeof(dummy_socinfo.build_id));
 	} else
 		strlcat(dummy_socinfo.build_id, "Dummy socinfo",
 			sizeof(dummy_socinfo.build_id));
@@ -1249,6 +1309,7 @@ static void * __init setup_dummy_socinfo(void)
 static void __init populate_soc_sysfs_files(struct device *msm_soc_device)
 {
 	device_create_file(msm_soc_device, &msm_soc_attr_vendor);
+	device_create_file(msm_soc_device, &msm_soc_attr_crash);
 	device_create_file(msm_soc_device, &image_version);
 	device_create_file(msm_soc_device, &image_variant);
 	device_create_file(msm_soc_device, &image_crm_version);
@@ -1369,6 +1430,7 @@ static int __init socinfo_init_sysfs(void)
 
 late_initcall(socinfo_init_sysfs);
 
+#ifndef CONFIG_SAMSUNG_PRODUCT_SHIP
 static void socinfo_print(void)
 {
 	uint32_t f_maj = SOCINFO_VERSION_MAJOR(socinfo_format);
@@ -1555,6 +1617,7 @@ static void socinfo_print(void)
 		break;
 	}
 }
+#endif
 
 static void socinfo_select_format(void)
 {
@@ -1603,7 +1666,9 @@ int __init socinfo_init(void)
 
 	cur_cpu = cpu_of_id[socinfo->v0_1.id].generic_soc_type;
 	boot_stats_init();
+#ifndef CONFIG_SAMSUNG_PRODUCT_SHIP
 	socinfo_print();
+#endif
 	arch_read_hardware_id = msm_read_hardware_id;
 	socinfo_init_done = true;
 

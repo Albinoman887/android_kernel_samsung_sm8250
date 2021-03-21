@@ -55,6 +55,24 @@ static inline void queue_lockdep_assert_held(struct request_queue *q)
 		lockdep_assert_held(q->queue_lock);
 }
 
+static inline void queue_flag_set_unlocked(unsigned int flag,
+					   struct request_queue *q)
+{
+	if (test_bit(QUEUE_FLAG_INIT_DONE, &q->queue_flags) &&
+	    kref_read(&q->kobj.kref))
+		lockdep_assert_held(q->queue_lock);
+	__set_bit(flag, &q->queue_flags);
+}
+
+static inline void queue_flag_clear_unlocked(unsigned int flag,
+					     struct request_queue *q)
+{
+	if (test_bit(QUEUE_FLAG_INIT_DONE, &q->queue_flags) &&
+	    kref_read(&q->kobj.kref))
+		lockdep_assert_held(q->queue_lock);
+	__clear_bit(flag, &q->queue_flags);
+}
+
 static inline int queue_flag_test_and_clear(unsigned int flag,
 					    struct request_queue *q)
 {
@@ -177,6 +195,18 @@ unsigned int blk_plug_queued_count(struct request_queue *q);
 void blk_account_io_start(struct request *req, bool new_io);
 void blk_account_io_completion(struct request *req, unsigned int bytes);
 void blk_account_io_done(struct request *req, u64 now);
+
+#ifdef CONFIG_BLK_IO_VOLUME
+void blk_queue_reset_io_vol(struct request_queue *q);
+void blk_queue_io_vol_add(struct request_queue *q, int opf, long long bytes);
+void blk_queue_io_vol_del(struct request_queue *q, int opf, long long bytes);
+void blk_queue_io_vol_merge(struct request_queue *q, int opf, int rqs, long long bytes);
+#else
+#define blk_queue_reset_io_vol(q)			do {} while (0)
+#define blk_queue_io_vol_add(q, opf, bytes)		do {} while (0)
+#define blk_queue_io_vol_del(q, opf, bytes)		do {} while (0)
+#define blk_queue_io_vol_merge(q, opf, rqs, bytes)	do {} while (0)
+#endif
 
 /*
  * EH timer and IO completion will both attempt to 'grab' the request, make

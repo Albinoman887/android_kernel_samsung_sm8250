@@ -254,6 +254,7 @@ struct icnss_stats {
 #define WLFW_MAX_NUM_CE 12
 #define WLFW_MAX_NUM_SVC 24
 #define WLFW_MAX_NUM_SHADOW_REG 24
+#define WLFW_MAX_HANG_EVENT_DATA_SIZE 400
 
 struct service_notifier_context {
 	void *handle;
@@ -324,6 +325,7 @@ struct icnss_priv {
 	dma_addr_t smmu_iova_start;
 	size_t smmu_iova_len;
 	dma_addr_t smmu_iova_ipa_start;
+	dma_addr_t smmu_iova_ipa_current;
 	size_t smmu_iova_ipa_len;
 	struct qmi_handle qmi;
 	struct list_head event_list;
@@ -393,6 +395,10 @@ struct icnss_priv {
 	void *get_info_cb_ctx;
 	int (*get_info_cb)(void *ctx, void *event, int event_len);
 	atomic_t soc_wake_ref_count;
+	phys_addr_t hang_event_data_pa;
+	void __iomem *hang_event_data_va;
+	uint16_t hang_event_data_len;
+	void *hang_event_data;
 	struct list_head icnss_tcdev_list;
 	struct mutex tcdev_lock;
 };

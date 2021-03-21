@@ -1329,9 +1329,10 @@ int mhi_process_data_event_ring(struct mhi_controller *mhi_cntrl,
 	while (dev_rp != local_rp && event_quota > 0) {
 		enum MHI_PKT_TYPE type = MHI_TRE_GET_EV_TYPE(local_rp);
 
-		MHI_VERB("Processing Event:0x%llx 0x%08x 0x%08x\n",
-			local_rp->ptr, local_rp->dword[0], local_rp->dword[1]);
-
+		MHI_VERB("Processing Event:0x%llx 0x%08x 0x%08x 0x%llx 0x%llx\n",
+			local_rp->ptr, local_rp->dword[0], local_rp->dword[1],
+			dev_rp, er_ctxt->rp);
+			
 		mhi_event->last_cached_tre.ptr = local_rp->ptr;
 		mhi_event->last_cached_tre.dword[0] = local_rp->dword[0];
 		mhi_event->last_cached_tre.dword[1] = local_rp->dword[1];
@@ -1353,7 +1354,7 @@ int mhi_process_data_event_ring(struct mhi_controller *mhi_cntrl,
 		}
 
 next_er_element:
-		mhi_recycle_ev_ring_element(mhi_cntrl, ev_ring);
+			mhi_recycle_ev_ring_element(mhi_cntrl, ev_ring);
 		local_rp = ev_ring->rp;
 		dev_rp = mhi_to_virtual(ev_ring, er_ctxt->rp);
 		count++;
@@ -1479,6 +1480,12 @@ int mhi_process_bw_scale_ev_ring(struct mhi_controller *mhi_cntrl,
 	if (ev_ring->rp == dev_rp) {
 		spin_unlock_bh(&mhi_event->lock);
 		goto exit_bw_scale_process;
+	}
+
+	if ((void*)dev_rp < ev_ring->base ||
+			(void*)dev_rp >= (ev_ring->base + ev_ring->len)) {
+		MHI_ERR("dev_rp out of bound 0x%llx\n", dev_rp);
+		panic("dev rp out of bound");
 	}
 
 	/* if rp points to base, we need to wrap it around */
@@ -2230,8 +2237,8 @@ int mhi_debugfs_mhi_event_show(struct seq_file *m, void *d)
 
 	int i;
 
-	if (!mhi_cntrl->mhi_ctxt)
-		return -ENODEV;
+	if (!mhi_cntrl->mhi_event || !mhi_cntrl->mhi_ctxt)
+		return 0;
 
 	seq_printf(m, "[%llu ns]:\n", sched_clock());
 
@@ -2266,8 +2273,8 @@ int mhi_debugfs_mhi_chan_show(struct seq_file *m, void *d)
 	struct mhi_chan_ctxt *chan_ctxt;
 	int i;
 
-	if (!mhi_cntrl->mhi_ctxt)
-		return -ENODEV;
+	if (!mhi_cntrl->mhi_chan || !mhi_cntrl->mhi_ctxt)
+		return 0;
 
 	seq_printf(m, "[%llu ns]:\n", sched_clock());
 
@@ -2631,7 +2638,7 @@ int mhi_get_remote_time_sync(struct mhi_device *mhi_dev,
 	/* bring to M0 state */
 	ret = __mhi_device_get_sync(mhi_cntrl);
 	if (ret)
-		goto err_unlock;
+		goto error_unlock;
 
 	read_lock_bh(&mhi_cntrl->pm_lock);
 	if (unlikely(MHI_PM_IN_ERROR_STATE(mhi_cntrl->pm_state))) {
@@ -2669,7 +2676,7 @@ int mhi_get_remote_time_sync(struct mhi_device *mhi_dev,
 error_invalid_state:
 	mhi_cntrl->wake_put(mhi_cntrl, false);
 	read_unlock_bh(&mhi_cntrl->pm_lock);
-err_unlock:
+error_unlock:
 	mutex_unlock(&mhi_cntrl->tsync_mutex);
 	return ret;
 }

@@ -382,7 +382,6 @@ struct mhi_controller {
 			struct mhi_link_info *link_info);
 	void (*write_reg)(struct mhi_controller *mhi_cntrl, void __iomem *base,
 			u32 offset, u32 val);
-
 	/* channel to control DTR messaging */
 	struct mhi_device *dtr_dev;
 
@@ -838,6 +837,12 @@ int mhi_get_remote_time_sync(struct mhi_device *mhi_dev,
 			     u64 *t_dev);
 
 /**
+ * mhi_get_exec_env - Return execution environment of the device
+ * @mhi_cntrl: MHI controller
+ */
+enum mhi_ee mhi_get_exec_env(struct mhi_controller *mhi_cntrl);
+
+/**
  * mhi_get_mhi_state - Return MHI state of device
  * @mhi_cntrl: MHI controller
  */
@@ -941,12 +946,7 @@ char *mhi_get_restart_reason(const char *name);
 
 #else
 
-#define MHI_VERB(fmt, ...) do { \
-		if (mhi_cntrl->log_buf && \
-		    (mhi_cntrl->log_lvl <= MHI_MSG_LVL_VERBOSE)) \
-			ipc_log_string(mhi_cntrl->log_buf, "[D][%s] " fmt, \
-				       __func__, ##__VA_ARGS__); \
-} while (0)
+#define MHI_VERB(fmt, ...)
 
 #endif
 

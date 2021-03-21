@@ -1517,6 +1517,48 @@ static void scsi_unprep_fn(struct request_queue *q, struct request *req)
 	scsi_uninit_cmd(blk_mq_rq_to_pdu(req));
 }
 
+#ifdef CONFIG_BLK_TURBO_WRITE
+static void scsi_tw_try_on_fn(struct request_queue *q)
+{
+	struct scsi_device *sdev = q->queuedata;
+	struct Scsi_Host *shost = sdev->host;
+
+        if(shost->hostt->tw_ctrl)
+                shost->hostt->tw_ctrl(sdev, 1);
+}
+
+static void scsi_tw_try_off_fn(struct request_queue *q)
+{
+	struct scsi_device *sdev = q->queuedata;
+	struct Scsi_Host *shost = sdev->host;
+
+        if(shost->hostt->tw_ctrl)
+		shost->hostt->tw_ctrl(sdev, 0);
+}
+
+void scsi_reset_tw_state(struct Scsi_Host *shost)
+{
+	struct scsi_device *sdev;
+
+	shost_for_each_device(sdev, shost) {
+		if (sdev->support_tw_lu)
+			blk_reset_tw_state(sdev->request_queue);
+	}
+}
+EXPORT_SYMBOL(scsi_reset_tw_state);
+
+void scsi_alloc_tw(struct scsi_device *sdev)
+{
+	if (sdev->support_tw_lu) {
+		blk_alloc_turbo_write(sdev->request_queue);
+		blk_register_tw_try_on_fn(sdev->request_queue, scsi_tw_try_on_fn);
+		blk_register_tw_try_off_fn(sdev->request_queue, scsi_tw_try_off_fn);
+		printk(KERN_INFO "%s: register scsi ufs tw interface for LU %d\n",
+				__func__, (int)sdev->lun);
+	}
+}
+#endif
+
 /*
  * scsi_dev_queue_ready: if we can send requests to sdev, return 1 else
  * return 0.
@@ -2261,8 +2303,6 @@ void __scsi_init_queue(struct Scsi_Host *shost, struct request_queue *q)
 	if (!shost->use_clustering)
 		q->limits.cluster = 0;
 
-	if (shost->inlinecrypt_support)
-		queue_flag_set_unlocked(QUEUE_FLAG_INLINECRYPT, q);
 	/*
 	 * Set a reasonable default alignment:  The larger of 32-byte (dword),
 	 * which is a common minimum for HBAs, and the minimum DMA alignment,
@@ -2377,7 +2417,8 @@ int scsi_mq_setup_tags(struct Scsi_Host *shost)
 {
 	unsigned int cmd_size, sgl_size;
 
-	sgl_size = scsi_mq_sgl_size(shost);
+	sgl_size = max_t(unsigned int, sizeof(struct scatterlist),
+			scsi_mq_sgl_size(shost));
 	cmd_size = sizeof(struct scsi_cmnd) + shost->hostt->cmd_size + sgl_size;
 	if (scsi_host_get_prot(shost))
 		cmd_size += sizeof(struct scsi_data_buffer) + sgl_size;

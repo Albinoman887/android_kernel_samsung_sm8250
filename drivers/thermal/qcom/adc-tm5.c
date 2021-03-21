@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
- * Copyright (c) 2012-2019, The Linux Foundation. All rights reserved.
+ * Copyright (c) 2012-2020, The Linux Foundation. All rights reserved.
  */
 
 #include <linux/module.h>
@@ -15,6 +15,9 @@
 #include <linux/iio/consumer.h>
 #include "adc-tm.h"
 #include "../thermal_core.h"
+#ifdef CONFIG_SEC_EXT_THERMAL_MONITOR
+#include <linux/wakelock.h>
+#endif /* CONFIG_SEC_EXT_THERMAL_MONITOR */
 
 #define ADC_TM_STATUS2				0x09
 #define ADC_TM_STATUS_LOW			0x0a
@@ -27,6 +30,9 @@
 
 #define ADC_TM_MEAS_INTERVAL_CTL		0x44
 #define ADC_TM_MEAS_INTERVAL_CTL2		0x45
+
+#define ADC_TM_MEAS_INTERVAL_CTL_660		0x50
+#define ADC_TM_MEAS_INTERVAL_CTL2_660		0x51
 
 #define ADC_TM_MEAS_INTERVAL_CTL2_SHIFT		0x4
 #define ADC_TM_MEAS_INTERVAL_CTL2_MASK		0xf0
@@ -75,6 +81,12 @@ static struct adc_tm_reverse_scale_fn adc_tm_rscale_fn[] = {
 	[SCALE_R_ABSOLUTE] = {adc_tm_absolute_rthr},
 };
 
+#ifdef CONFIG_SEC_EXT_THERMAL_MONITOR
+#define VDD_REF_MV	1875
+static struct wake_lock adctm_wakelock;
+static int wlock_init = 0;
+#endif /* CONFIG_SEC_EXT_THERMAL_MONITOR */
+
 static int adc_tm5_get_temp(struct adc_tm_sensor *sensor, int *temp)
 {
 	int ret, milli_celsius;
@@ -86,6 +98,11 @@ static int adc_tm5_get_temp(struct adc_tm_sensor *sensor, int *temp)
 	if (ret < 0)
 		return ret;
 
+#ifdef CONFIG_SEC_EXT_THERMAL_MONITOR
+	if (sensor->adc_ch == 0x4d || sensor->adc_ch == 0x52)
+		*temp = sec_bat_convert_adc_to_temp(sensor->adc_ch, milli_celsius);
+	else
+#endif /* CONFIG_SEC_EXT_THERMAL_MONITOR */
 	*temp = milli_celsius;
 
 	return 0;
@@ -759,6 +776,9 @@ static int adc_tm5_set_trip_temp(struct adc_tm_sensor *sensor,
 	int ret;
 	uint32_t btm_chan = 0, btm_chan_idx = 0, mask = 0;
 	unsigned long flags;
+#ifdef CONFIG_SEC_EXT_THERMAL_MONITOR
+	int64_t remap_high_thr_voltage = 0, remap_low_thr_voltage = 0;
+#endif /* CONFIG_SEC_EXT_THERMAL_MONITOR */
 
 	if (!sensor)
 		return -EINVAL;
@@ -782,6 +802,44 @@ static int adc_tm5_set_trip_temp(struct adc_tm_sensor *sensor,
 	pr_debug("requested a low temp- %d and high temp- %d\n",
 			tm_config.low_thr_temp, tm_config.high_thr_temp);
 	adc_tm_scale_therm_voltage_100k(&tm_config, chip->data);
+
+#ifdef CONFIG_SEC_EXT_THERMAL_MONITOR
+	if (tm_config.channel == 0x4d || tm_config.channel == 0x52) {
+		pr_debug("%s: adc_ch(0x%x) low_temp %d, high_temp %d\n",
+			__func__, sensor->adc_ch, low_temp, high_temp);
+
+		/* NOTE: Remap trip threshold voltage for adc-tm interrupt
+		 * if remap_voltage is nonzero, then reset threshold voltage.
+		 * Otherwise, it means sec_adc driver is not ready, so skip it.
+		 */
+		if (high_temp != INT_MAX) {
+			remap_low_thr_voltage =
+				sec_bat_get_thr_voltage(sensor->adc_ch, (high_temp/100));
+
+			if (remap_low_thr_voltage) {
+				pr_info("%s: adc_ch(0x%x) high_temp %d - voltage %lld\n",
+					__func__, sensor->adc_ch, high_temp, remap_low_thr_voltage);
+				tm_config.low_thr_voltage =
+					remap_low_thr_voltage * chip->data->full_scale_code_volt;
+				tm_config.low_thr_voltage =
+					div64_s64(tm_config.low_thr_voltage, VDD_REF_MV);
+			}
+		}
+		if (low_temp != INT_MIN) {
+			remap_high_thr_voltage =
+				sec_bat_get_thr_voltage(sensor->adc_ch, (low_temp/100)) + 1;
+
+			if (remap_high_thr_voltage) {
+				pr_info("%s: adc_ch(0x%x) low_temp %d - voltage %lld\n",
+					__func__, sensor->adc_ch, low_temp, remap_high_thr_voltage);
+				tm_config.high_thr_voltage =
+					remap_high_thr_voltage * chip->data->full_scale_code_volt;
+				tm_config.high_thr_voltage =
+					div64_s64(tm_config.high_thr_voltage, VDD_REF_MV);
+			}
+		}
+	}
+#endif /* CONFIG_SEC_EXT_THERMAL_MONITOR */
 
 	/* Cool temperature corresponds to high voltage threshold */
 	mask = lower_32_bits(tm_config.high_thr_voltage);
@@ -955,6 +1013,16 @@ fail:
 			 * with new thresholds and activate/disable
 			 * the appropriate trips.
 			 */
+#ifdef CONFIG_SEC_EXT_THERMAL_MONITOR
+			pr_info("%s: adc_ch(0x%x) - temp: %d, ctl: 0x%x, Lower: %d, Upper: %d\n",
+				__func__, chip->sensor[i].adc_ch, temp, ctl, lower_set, upper_set);
+
+			/* Acquire wakelock for 5 secs to prevent entering sleep
+			 * before handling thermal notification in user-space
+			 */
+			 if (!wake_lock_active(&adctm_wakelock))
+				wake_lock_timeout(&adctm_wakelock, msecs_to_jiffies(5000));
+#endif /* CONFIG_SEC_EXT_THERMAL_MONITOR */
 			pr_debug("notifying of_thermal\n");
 			temp = therm_fwd_scale((int64_t)code,
 						ADC_HC_VDD_REF, chip->data);
@@ -1035,22 +1103,31 @@ static int adc_tm5_init(struct adc_tm_chip *chip, uint32_t dt_chans)
 {
 	u8 buf[4], channels_available, meas_int_timer_2_3 = 0;
 	int ret;
+	int dig_param_len = 4;
+	bool pmic_subtype_660 = false;
 	unsigned int offset_btm_idx = 0, i;
 
-	ret = adc_tm5_read_reg(chip, ADC_TM_NUM_BTM, &channels_available, 1);
-	if (ret < 0) {
-		pr_err("read failed for BTM channels\n");
-		return ret;
-	}
+	if ((chip->pmic_rev_id) &&
+		(chip->pmic_rev_id->pmic_subtype == PM660_SUBTYPE)) {
+		dig_param_len = 2;
+		pmic_subtype_660 = true;
+	} else {
+		ret = adc_tm5_read_reg(chip, ADC_TM_NUM_BTM,
+					&channels_available, 1);
+		if (ret < 0) {
+			pr_err("read failed for BTM channels\n");
+			return ret;
+		}
 
-	if (dt_chans > channels_available) {
-		pr_err("Number of nodes greater than channels supported:%d\n",
-							channels_available);
-		return -EINVAL;
+		if (dt_chans > channels_available) {
+			pr_err("More nodes than channels supported:%d\n",
+						channels_available);
+			return -EINVAL;
+		}
 	}
 
 	ret = adc_tm5_read_reg(chip,
-			ADC_TM_ADC_DIG_PARAM, buf, 4);
+			ADC_TM_ADC_DIG_PARAM, buf, dig_param_len);
 	if (ret < 0) {
 		pr_err("adc-tm block read failed with %d\n", ret);
 		return ret;
@@ -1072,9 +1149,17 @@ static int adc_tm5_init(struct adc_tm_chip *chip, uint32_t dt_chans)
 	buf[3] = meas_int_timer_2_3;
 
 	ret = adc_tm5_write_reg(chip,
-			ADC_TM_ADC_DIG_PARAM, buf, 4);
+			ADC_TM_ADC_DIG_PARAM, buf, dig_param_len);
 	if (ret < 0)
 		pr_err("adc-tm block write failed with %d\n", ret);
+
+	if (pmic_subtype_660) {
+		ret = adc_tm5_write_reg(chip,
+				ADC_TM_MEAS_INTERVAL_CTL_660, &buf[2], 2);
+
+		if (ret < 0)
+			pr_err("adc-tm block write failed with %d\n", ret);
+	}
 
 	spin_lock_init(&chip->adc_tm_lock);
 	mutex_init(&chip->adc_mutex_lock);
@@ -1099,7 +1184,10 @@ static int adc_tm5_init(struct adc_tm_chip *chip, uint32_t dt_chans)
 		chip->sensor[i].btm_ch =
 				adc_tm_ch_data[i + offset_btm_idx].btm_amux_ch;
 	}
-
+#ifdef CONFIG_SEC_EXT_THERMAL_MONITOR
+	if(!wlock_init++)
+		wake_lock_init(&adctm_wakelock, WAKE_LOCK_SUSPEND, "adctm_lock");
+#endif /* CONFIG_SEC_EXT_THERMAL_MONITOR */
 	return ret;
 }
 
@@ -1119,4 +1207,12 @@ const struct adc_tm_data data_adc_tm5 = {
 	.decimation = (unsigned int []) {250, 420, 840},
 	.hw_settle = (unsigned int []) {15, 100, 200, 300, 400, 500, 600, 700,
 					1, 2, 4, 8, 16, 32, 64, 128},
+};
+
+const struct adc_tm_data data_adc_tm_rev2 = {
+	.ops			= &ops_adc_tm5,
+	.full_scale_code_volt	= 0x4000,
+	.decimation = (unsigned int []) {256, 512, 1024},
+	.hw_settle = (unsigned int []) {0, 100, 200, 300, 400, 500, 600, 700,
+					800, 900, 1, 2, 4, 6, 8, 10},
 };

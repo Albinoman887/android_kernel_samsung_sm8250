@@ -1429,8 +1429,17 @@ void sdhci_send_command(struct sdhci_host *host, struct mmc_command *cmd)
 		timeout += nsecs_to_jiffies(host->data_timeout);
 	else if (!cmd->data && cmd->busy_timeout > 9000)
 		timeout += DIV_ROUND_UP(cmd->busy_timeout, 1000) * HZ + HZ;
+#if defined(CONFIG_HDM)
+	else {
+		if (!cmd->data)
+			timeout += 1 * HZ;
+		else
+			timeout += 10 * HZ;
+	}
+#else
 	else
 		timeout += 10 * HZ;
+#endif
 	sdhci_mod_timer(host, cmd->mrq, timeout);
 
 	if (cmd->data)
@@ -1916,49 +1925,7 @@ static int sdhci_get_tuning_cmd(struct sdhci_host *host)
 		return MMC_SEND_TUNING_BLOCK;
 }
 
-static int sdhci_crypto_cfg(struct sdhci_host *host, struct mmc_request *mrq,
-		u32 slot)
-{
-	int err = 0;
-
-	if (host->mmc->inlinecrypt_reset_needed &&
-			host->ops->crypto_engine_reset) {
-		err = host->ops->crypto_engine_reset(host);
-		if (err) {
-			pr_err("%s: crypto reset failed\n",
-					mmc_hostname(host->mmc));
-			goto out;
-		}
-		host->mmc->inlinecrypt_reset_needed = false;
-	}
-
-	if (host->ops->crypto_engine_cfg) {
-		err = host->ops->crypto_engine_cfg(host, mrq, slot);
-		if (err) {
-			pr_err("%s: failed to configure crypto\n",
-					mmc_hostname(host->mmc));
-			goto out;
-		}
-	}
-out:
-	return err;
-}
-
-static int sdhci_crypto_cfg_end(struct sdhci_host *host,
-				struct mmc_request *mrq)
-{
-	int err = 0;
-
-	if (host->ops->crypto_engine_cfg_end) {
-		err = host->ops->crypto_engine_cfg_end(host, mrq);
-		if (err) {
-			pr_err("%s: failed to configure crypto\n",
-					mmc_hostname(host->mmc));
-			return err;
-		}
-	}
-	return 0;
-}
+static int sdhci_card_busy(struct mmc_host *mmc);
 
 static void sdhci_request(struct mmc_host *mmc, struct mmc_request *mrq)
 {
@@ -1997,6 +1964,16 @@ static void sdhci_request(struct mmc_host *mmc, struct mmc_request *mrq)
 					SDHCI_CARD_PRESENT;
 	}
 
+	/*
+	 * Check SDcard busy signal by DAT0 before sending CMD13
+	 * about 10ms : 100us * 100 times
+	 */
+	if (present && (mrq->cmd->opcode == MMC_SEND_STATUS)) {
+		int tries = 100;
+		while (sdhci_card_busy(mmc) && --tries)
+			usleep_range(95, 105);
+	}
+
 	spin_lock_irqsave(&host->lock, flags);
 
 	if (!(host->quirks2 & SDHCI_QUIRK2_BROKEN_LED_CONTROL))
@@ -2026,13 +2003,6 @@ static void sdhci_request(struct mmc_host *mmc, struct mmc_request *mrq)
 					sdhci_get_tuning_cmd(host));
 		}
 
-		if (host->is_crypto_en) {
-			spin_unlock_irqrestore(&host->lock, flags);
-			if (sdhci_crypto_cfg(host, mrq, 0))
-				goto end_req;
-			spin_lock_irqsave(&host->lock, flags);
-		}
-
 		if (mrq->sbc && !(host->flags & SDHCI_AUTO_CMD23))
 			sdhci_send_command(host, mrq->sbc);
 		else
@@ -2042,13 +2012,6 @@ static void sdhci_request(struct mmc_host *mmc, struct mmc_request *mrq)
 	mmiowb();
 	spin_unlock_irqrestore(&host->lock, flags);
 	return;
-end_req:
-	mrq->cmd->error = -EIO;
-	if (mrq->data)
-		mrq->data->error = -EIO;
-	host->mrq = NULL;
-	sdhci_dumpregs(host);
-	mmc_request_done(host->mmc, mrq);
 }
 
 void sdhci_set_bus_width(struct sdhci_host *host, int width)
@@ -2083,9 +2046,7 @@ void sdhci_set_uhs_signaling(struct sdhci_host *host, unsigned timing)
 		ctrl_2 |= SDHCI_CTRL_UHS_SDR104;
 	else if (timing == MMC_TIMING_UHS_SDR12)
 		ctrl_2 |= SDHCI_CTRL_UHS_SDR12;
-	else if (timing == MMC_TIMING_SD_HS ||
-		 timing == MMC_TIMING_MMC_HS ||
-		 timing == MMC_TIMING_UHS_SDR25)
+	else if (timing == MMC_TIMING_UHS_SDR25)
 		ctrl_2 |= SDHCI_CTRL_UHS_SDR25;
 	else if (timing == MMC_TIMING_UHS_SDR50)
 		ctrl_2 |= SDHCI_CTRL_UHS_SDR50;
@@ -2189,6 +2150,10 @@ void sdhci_set_ios(struct mmc_host *mmc, struct mmc_ios *ios)
 				mmc_card_sdio(host->mmc->card))
 			sdhci_cfg_irq(host, true, false);
 		spin_unlock_irqrestore(&host->lock, flags);
+#if defined(CONFIG_SEC_HYBRID_TRAY)
+		sdhci_set_power(host, ios->power_mode, ios->vdd);
+		host->ops->set_clock(host, ios->clock);
+#endif
 		return;
 	}
 	spin_unlock_irqrestore(&host->lock, flags);
@@ -2728,8 +2693,8 @@ static void __sdhci_execute_tuning(struct sdhci_host *host, u32 opcode)
 		sdhci_send_tuning(host, opcode);
 
 		if (!host->tuning_done) {
-			pr_info("%s: Tuning timeout, falling back to fixed sampling clock\n",
-				mmc_hostname(host->mmc));
+			pr_debug("%s: Tuning timeout, falling back to fixed sampling clock\n",
+				 mmc_hostname(host->mmc));
 			sdhci_abort_tuning(host, opcode);
 			return;
 		}
@@ -2950,6 +2915,20 @@ static void sdhci_card_event(struct mmc_host *mmc)
 	}
 
 	spin_unlock_irqrestore(&host->lock, flags);
+
+#if defined(CONFIG_HDM)
+	if (present) {
+		sdhci_writel(host, 0, SDHCI_SIGNAL_ENABLE);
+		sdhci_reinit(host);
+		sdhci_set_power(host, mmc->ios.power_mode, mmc->ios.vdd);
+		if (host->ops->set_clock)
+			host->ops->set_clock(host, mmc->ios.clock);
+
+		/* to set PWRMASK */
+		if (host->ops->card_event)
+			host->ops->card_event(host);
+	}
+#endif
 }
 
 static int sdhci_late_init(struct mmc_host *mmc)
@@ -3117,7 +3096,6 @@ static bool sdhci_request_done(struct sdhci_host *host)
 	mmiowb();
 	spin_unlock_irqrestore(&host->lock, flags);
 
-	sdhci_crypto_cfg_end(host, mrq);
 	mmc_request_done(host->mmc, mrq);
 
 	return false;
@@ -3148,7 +3126,7 @@ static void sdhci_timeout_timer(struct timer_list *t)
 				"Timeout waiting for cmd interrupt\n");
 		sdhci_dumpregs(host);
 
-		host->cmd->error = -ETIMEDOUT;
+		host->cmd->error = -ENOMEDIUM;
 		sdhci_finish_mrq(host, host->cmd->mrq);
 	}
 
@@ -3166,6 +3144,10 @@ static void sdhci_timeout_data_timer(struct timer_list *t)
 	spin_lock_irqsave(&host->lock, flags);
 
 	if (host->data || host->data_cmd ||
+#if defined(CONFIG_HDM)
+	    (host->cmd && host->cmd->mrq && host->cmd->mrq->data &&
+	     (host->cmd == host->cmd->mrq->data->stop)) ||
+#endif
 	    (host->cmd && sdhci_data_line_cmd(host->cmd))) {
 		host->mmc->err_stats[MMC_ERR_REQ_TIMEOUT]++;
 		pr_err("%s: Timeout waiting for hardware interrupt.\n",
@@ -3180,13 +3162,13 @@ static void sdhci_timeout_data_timer(struct timer_list *t)
 				(host->data->blksz * host->data->blocks),
 				(sdhci_readw(host, SDHCI_BLOCK_SIZE) & 0xFFF) *
 				sdhci_readw(host, SDHCI_BLOCK_COUNT));
-			host->data->error = -ETIMEDOUT;
+			host->data->error = -ENOMEDIUM;
 			sdhci_finish_data(host);
 		} else if (host->data_cmd) {
-			host->data_cmd->error = -ETIMEDOUT;
+			host->data_cmd->error = -ENOMEDIUM;
 			sdhci_finish_mrq(host, host->data_cmd->mrq);
 		} else {
-			host->cmd->error = -ETIMEDOUT;
+			host->cmd->error = -ENOMEDIUM;
 			sdhci_finish_mrq(host, host->cmd->mrq);
 		}
 	}
@@ -4037,6 +4019,8 @@ struct sdhci_host *sdhci_alloc_host(struct device *dev,
 
 	host->sdma_boundary = SDHCI_DEFAULT_BOUNDARY_ARG;
 
+	mmc->trigger_card_event = true;
+
 	spin_lock_init(&host->lock);
 	ratelimit_state_init(&host->dbg_dump_rs, SDHCI_DBG_DUMP_RS_INTERVAL,
 			SDHCI_DBG_DUMP_RS_BURST);
@@ -4252,6 +4236,9 @@ int sdhci_setup_host(struct sdhci_host *host)
 		       mmc_hostname(mmc), host->version);
 	}
 
+	if (host->quirks & SDHCI_QUIRK_BROKEN_CQE)
+		mmc->caps2 &= ~MMC_CAP2_CQE;
+
 	if (host->quirks & SDHCI_QUIRK_FORCE_DMA)
 		host->flags |= SDHCI_USE_SDMA;
 	else if (!(host->caps & SDHCI_CAN_DO_SDMA))
@@ -4400,11 +4387,13 @@ int sdhci_setup_host(struct sdhci_host *host)
 	if (host->ops->get_min_clock)
 		mmc->f_min = host->ops->get_min_clock(host);
 	else if (host->version >= SDHCI_SPEC_300) {
-		if (host->clk_mul) {
-			mmc->f_min = (host->max_clk * host->clk_mul) / 1024;
+		if (host->clk_mul)
 			max_clk = host->max_clk * host->clk_mul;
-		} else
-			mmc->f_min = host->max_clk / SDHCI_MAX_DIV_SPEC_300;
+		/*
+		 * Divided Clock Mode minimum clock rate is always less than
+		 * Programmable Clock Mode minimum clock rate.
+		 */
+		mmc->f_min = host->max_clk / SDHCI_MAX_DIV_SPEC_300;
 	} else
 		mmc->f_min = host->max_clk / SDHCI_MAX_DIV_SPEC_200;
 
@@ -4610,6 +4599,10 @@ int sdhci_setup_host(struct sdhci_host *host)
 				(curr << SDHCI_MAX_CURRENT_180_SHIFT);
 		}
 	}
+
+#if defined(CONFIG_HDM)
+	host->caps |= (SDHCI_CAN_VDD_300 | SDHCI_CAN_VDD_180);
+#endif
 
 	if (host->caps & SDHCI_CAN_VDD_330) {
 		ocr_avail |= MMC_VDD_32_33 | MMC_VDD_33_34;

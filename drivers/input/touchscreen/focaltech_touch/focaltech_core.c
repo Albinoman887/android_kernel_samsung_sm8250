@@ -56,9 +56,8 @@
 #define INTERVAL_READ_REG                   200  /* unit:ms */
 #define TIMEOUT_READ_REG                    1000 /* unit:ms */
 #if FTS_POWER_SOURCE_CUST_EN
-#define FTS_VTG_MIN_UV                      3000000
+#define FTS_VTG_MIN_UV                      2800000
 #define FTS_VTG_MAX_UV                      3300000
-#define FTS_LOAD_MAX_UA                     30000
 #define FTS_I2C_VTG_MIN_UV                  1800000
 #define FTS_I2C_VTG_MAX_UV                  1800000
 #endif
@@ -1015,13 +1014,6 @@ static int fts_power_source_init(struct fts_ts_data *ts_data)
 			regulator_put(ts_data->vdd);
 			return ret;
 		}
-
-		ret = regulator_set_load(ts_data->vdd, FTS_LOAD_MAX_UA);
-		if (ret) {
-			FTS_ERROR("vdd regulator set_load failed ret=%d", ret);
-			regulator_put(ts_data->vdd);
-			return ret;
-		}
 	}
 
 	ts_data->vcc_i2c = regulator_get(ts_data->dev, "vcc_i2c");
@@ -1306,11 +1298,11 @@ static int fb_notifier_callback(struct notifier_block *self,
 	}
 
 	blank = evdata->data;
-	FTS_DEBUG("FB event:%lu,blank:%d", event, *blank);
+	FTS_INFO("FB event:%lu,blank:%d", event, *blank);
 	switch (*blank) {
 	case DRM_PANEL_BLANK_UNBLANK:
 		if (event == DRM_PANEL_EARLY_EVENT_BLANK) {
-			FTS_DEBUG("resume: event = %lu, not care\n", event);
+			FTS_INFO("resume: event = %lu, not care\n", event);
 		} else if (event == DRM_PANEL_EVENT_BLANK) {
 			queue_work(fts_data->ts_workqueue,
 				&fts_data->resume_work);
@@ -1322,12 +1314,12 @@ static int fb_notifier_callback(struct notifier_block *self,
 			cancel_work_sync(&fts_data->resume_work);
 			fts_ts_suspend(ts_data->dev);
 		} else if (event == DRM_PANEL_EVENT_BLANK) {
-			FTS_DEBUG("suspend: event = %lu, not care\n", event);
+			FTS_INFO("suspend: event = %lu, not care\n", event);
 		}
 		break;
 
 	default:
-		FTS_DEBUG("FB BLANK(%d) do not need process\n", *blank);
+		FTS_INFO("FB BLANK(%d) do not need process\n", *blank);
 		break;
 	}
 

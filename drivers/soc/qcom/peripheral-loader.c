@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
- * Copyright (c) 2010-2019, The Linux Foundation. All rights reserved.
+ * Copyright (c) 2010-2020, The Linux Foundation. All rights reserved.
  */
 
 #include <linux/module.h>
@@ -37,6 +37,9 @@
 #include <trace/events/trace_msm_pil_event.h>
 
 #include "peripheral-loader.h"
+
+#include <linux/sec_debug.h>
+#include <soc/qcom/watchdog.h>
 
 #define pil_err(desc, fmt, ...)						\
 	dev_err(desc->dev, "%s: " fmt, desc->name, ##__VA_ARGS__)
@@ -134,7 +137,7 @@ struct pil_seg {
  */
 struct pil_priv {
 	struct delayed_work proxy;
-	struct wakeup_source ws;
+	struct wakeup_source *ws;
 	char wname[32];
 	struct pil_desc *desc;
 	int num_segs;
@@ -611,7 +614,7 @@ static void __pil_proxy_unvote(struct pil_priv *priv)
 
 	desc->ops->proxy_unvote(desc);
 	notify_proxy_unvote(desc->dev);
-	__pm_relax(&priv->ws);
+	__pm_relax(priv->ws);
 	module_put(desc->owner);
 
 }
@@ -630,10 +633,10 @@ static int pil_proxy_vote(struct pil_desc *desc)
 	struct pil_priv *priv = desc->priv;
 
 	if (desc->ops->proxy_vote) {
-		__pm_stay_awake(&priv->ws);
+		__pm_stay_awake(priv->ws);
 		ret = desc->ops->proxy_vote(desc);
 		if (ret)
-			__pm_relax(&priv->ws);
+			__pm_relax(priv->ws);
 	}
 
 	if (desc->proxy_unvote_irq)
@@ -1227,10 +1230,16 @@ int pil_boot(struct pil_desc *desc)
 	struct pil_priv *priv = desc->priv;
 	bool mem_protect = false;
 	bool hyp_assign = false;
+	bool secure_check_fail = false;
 
+	pil_info(desc, "Sending ON message to AOP ...\n");
 	ret = pil_notify_aop(desc, "on");
 	if (ret < 0) {
 		pil_err(desc, "Failed to send ON message to AOP rc:%d\n", ret);
+		if (ret == -ETIME) {
+			smp_send_stop();
+			msm_trigger_wdog_bite();
+		}
 		return ret;
 	}
 
@@ -1291,6 +1300,7 @@ int pil_boot(struct pil_desc *desc)
 		ret = desc->ops->init_image(desc, fw->data, fw->size);
 	if (ret) {
 		pil_err(desc, "Initializing image failed(rc:%d)\n", ret);
+		secure_check_fail = true;
 		goto err_boot;
 	}
 
@@ -1335,7 +1345,7 @@ int pil_boot(struct pil_desc *desc)
 	 * Fallback to serial loading of blobs if the
 	 * workqueue creatation failed during module init.
 	 */
-	if (pil_wq) {
+	if (pil_wq && !(desc->sequential_loading)) {
 		ret = pil_load_segs(desc);
 		if (ret)
 			goto err_deinit_image;
@@ -1365,6 +1375,7 @@ int pil_boot(struct pil_desc *desc)
 	ret = desc->ops->auth_and_reset(desc);
 	if (ret) {
 		pil_err(desc, "Failed to bring out of reset(rc:%d)\n", ret);
+		secure_check_fail = true;
 		goto err_auth_and_reset;
 	}
 	pil_log("reset_done", desc);
@@ -1405,6 +1416,11 @@ out:
 		}
 		pil_release_mmap(desc);
 		pil_notify_aop(desc, "off");
+
+		if (IS_ENABLED(SEC_PERIPHERAL_SECURE_CHK) &&
+		    secure_check_fail && (ret == -EINVAL) &&
+		    (!strcmp(desc->name, "mba") || !strcmp(desc->name, "modem")))
+			sec_peripheral_secure_check_fail();
 	}
 	return ret;
 }
@@ -1591,7 +1607,13 @@ int pil_desc_init(struct pil_desc *desc)
 	}
 
 	snprintf(priv->wname, sizeof(priv->wname), "pil-%s", desc->name);
-	wakeup_source_init(&priv->ws, priv->wname);
+
+	priv->ws = wakeup_source_register(desc->dev, priv->wname);
+	if (!priv->ws) {
+		ret = -ENOMEM;
+		goto err;
+	}
+
 	INIT_DELAYED_WORK(&priv->proxy, pil_proxy_unvote_work);
 	INIT_LIST_HEAD(&priv->segs);
 
@@ -1627,7 +1649,7 @@ void pil_desc_release(struct pil_desc *desc)
 	if (priv) {
 		ida_simple_remove(&pil_ida, priv->id);
 		flush_delayed_work(&priv->proxy);
-		wakeup_source_trash(&priv->ws);
+		wakeup_source_unregister(priv->ws);
 	}
 	desc->priv = NULL;
 	kfree(priv);

@@ -798,7 +798,7 @@ static void xhci_stop(struct usb_hcd *hcd)
  *
  * This will only ever be called with the main usb_hcd (the USB3 roothub).
  */
-static void xhci_shutdown(struct usb_hcd *hcd)
+void xhci_shutdown(struct usb_hcd *hcd)
 {
 	struct xhci_hcd *xhci = hcd_to_xhci(hcd);
 
@@ -817,11 +817,8 @@ static void xhci_shutdown(struct usb_hcd *hcd)
 	xhci_dbg_trace(xhci, trace_xhci_dbg_init,
 			"xhci_shutdown completed - status = %x",
 			readl(&xhci->op_regs->status));
-
-	/* Yet another workaround for spurious wakeups at shutdown with HSW */
-	if (xhci->quirks & XHCI_SPURIOUS_WAKEUP)
-		pci_set_power_state(to_pci_dev(hcd->self.sysdev), PCI_D3hot);
 }
+EXPORT_SYMBOL_GPL(xhci_shutdown);
 
 #ifdef CONFIG_PM
 static void xhci_save_registers(struct xhci_hcd *xhci)
@@ -992,7 +989,7 @@ static bool xhci_pending_portevent(struct xhci_hcd *xhci)
 int xhci_suspend(struct xhci_hcd *xhci, bool do_wakeup)
 {
 	int			rc = 0;
-	unsigned int		delay = XHCI_MAX_HALT_USEC;
+	unsigned int		delay = XHCI_MAX_HALT_USEC * 2;
 	struct usb_hcd		*hcd = xhci_to_hcd(xhci);
 	u32			command;
 	u32			res;
@@ -1037,6 +1034,12 @@ int xhci_suspend(struct xhci_hcd *xhci, bool do_wakeup)
 	if (xhci_handshake(&xhci->op_regs->status,
 		      STS_HALT, STS_HALT, delay)) {
 		xhci_warn(xhci, "WARN: xHC CMD_RUN timeout\n");
+		/* Set the HW_ACCESSIBLE so that any pending interrupts are
+		 * served.
+		 */
+		set_bit(HCD_FLAG_HW_ACCESSIBLE, &hcd->flags);
+		set_bit(HCD_FLAG_HW_ACCESSIBLE, &xhci->shared_hcd->flags);
+		xhci_hc_died(xhci);
 		spin_unlock_irq(&xhci->lock);
 		return -ETIMEDOUT;
 	}
@@ -5222,6 +5225,7 @@ static phys_addr_t xhci_get_sec_event_ring_phys_addr(struct usb_hcd *hcd,
 	struct device *dev = hcd->self.sysdev;
 	struct sg_table sgt;
 	phys_addr_t pa;
+	int result = 0;
 
 	if (intr_num >= xhci->max_interrupters) {
 		xhci_err(xhci, "intr num %d >= max intrs %d\n", intr_num,
@@ -5233,10 +5237,15 @@ static phys_addr_t xhci_get_sec_event_ring_phys_addr(struct usb_hcd *hcd,
 		xhci->sec_event_ring && xhci->sec_event_ring[intr_num]
 		&& xhci->sec_event_ring[intr_num]->first_seg) {
 
-		dma_get_sgtable(dev, &sgt,
+		result = dma_get_sgtable(dev, &sgt,
 			xhci->sec_event_ring[intr_num]->first_seg->trbs,
 			xhci->sec_event_ring[intr_num]->first_seg->dma,
 			TRB_SEGMENT_SIZE);
+
+		if(result < 0) {
+			xhci_err(xhci, "%s: error occured=%d\n", __func__, result);
+			return 0;
+		}
 
 		*dma = xhci->sec_event_ring[intr_num]->first_seg->dma;
 
@@ -5259,6 +5268,7 @@ static phys_addr_t xhci_get_xfer_ring_phys_addr(struct usb_hcd *hcd,
 	struct xhci_hcd *xhci = hcd_to_xhci(hcd);
 	struct sg_table sgt;
 	phys_addr_t pa;
+	int result = 0;
 
 	ret = xhci_check_args(hcd, udev, ep, 1, true, __func__);
 	if (ret <= 0) {
@@ -5272,11 +5282,16 @@ static phys_addr_t xhci_get_xfer_ring_phys_addr(struct usb_hcd *hcd,
 	if (virt_dev->eps[ep_index].ring &&
 		virt_dev->eps[ep_index].ring->first_seg) {
 
-		dma_get_sgtable(dev, &sgt,
+		result = dma_get_sgtable(dev, &sgt,
 			virt_dev->eps[ep_index].ring->first_seg->trbs,
 			virt_dev->eps[ep_index].ring->first_seg->dma,
 			TRB_SEGMENT_SIZE);
 
+		if(result < 0) {
+			xhci_err(xhci, "%s: error occured=%d\n", __func__, result);
+			return 0;
+		}
+			
 		*dma = virt_dev->eps[ep_index].ring->first_seg->dma;
 
 		pa = page_to_phys(sg_page(sgt.sgl));

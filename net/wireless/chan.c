@@ -6,7 +6,6 @@
  *
  * Copyright 2009	Johannes Berg <johannes@sipsolutions.net>
  * Copyright 2013-2014  Intel Mobile Communications GmbH
- * Copyright 2018-2020	Intel Corporation
  */
 
 #include <linux/export.h>
@@ -876,8 +875,10 @@ bool cfg80211_chandef_usable(struct wiphy *wiphy,
 {
 	struct ieee80211_sta_ht_cap *ht_cap;
 	struct ieee80211_sta_vht_cap *vht_cap;
+	const struct ieee80211_sta_he_cap *he_cap;
 	struct ieee80211_edmg *edmg_cap;
 	u32 width, control_freq, cap;
+	bool is_6ghz_chan;
 
 	if (WARN_ON(!cfg80211_chandef_valid(chandef)))
 		return false;
@@ -885,6 +886,12 @@ bool cfg80211_chandef_usable(struct wiphy *wiphy,
 	ht_cap = &wiphy->bands[chandef->chan->band]->ht_cap;
 	vht_cap = &wiphy->bands[chandef->chan->band]->vht_cap;
 	edmg_cap = &wiphy->bands[chandef->chan->band]->edmg_cap;
+	//TODO: need to work on how to select correct iftype depending on the op that is invoking cfg80211_chandef_usable()
+	he_cap = ieee80211_get_he_iftype_cap(wiphy->bands[chandef->chan->band],
+					     NL80211_IFTYPE_AP);
+	is_6ghz_chan = (chandef->chan->band == NL80211_BAND_6GHZ);
+	if (is_6ghz_chan && he_cap == NULL)
+		return false;
 
 	if (edmg_cap->channels &&
 	    !cfg80211_edmg_usable(wiphy,
@@ -905,22 +912,23 @@ bool cfg80211_chandef_usable(struct wiphy *wiphy,
 		width = 10;
 		break;
 	case NL80211_CHAN_WIDTH_20:
-		if (!ht_cap->ht_supported &&
-		    chandef->chan->band != NL80211_BAND_6GHZ)
+		if (!ht_cap->ht_supported && !is_6ghz_chan)
 			return false;
-		/* fall through */
 	case NL80211_CHAN_WIDTH_20_NOHT:
 		prohibited_flags |= IEEE80211_CHAN_NO_20MHZ;
 		width = 20;
 		break;
 	case NL80211_CHAN_WIDTH_40:
 		width = 40;
-		if (chandef->chan->band == NL80211_BAND_6GHZ)
-			break;
-		if (!ht_cap->ht_supported)
+		if (!ht_cap->ht_supported && !is_6ghz_chan)
 			return false;
-		if (!(ht_cap->cap & IEEE80211_HT_CAP_SUP_WIDTH_20_40) ||
-		    ht_cap->cap & IEEE80211_HT_CAP_40MHZ_INTOLERANT)
+		if (!is_6ghz_chan &&
+		    (!(ht_cap->cap & IEEE80211_HT_CAP_SUP_WIDTH_20_40) ||
+		    ht_cap->cap & IEEE80211_HT_CAP_40MHZ_INTOLERANT))
+			return false;
+		if (is_6ghz_chan &&
+		    !(he_cap->he_cap_elem.phy_cap_info[0] &
+		    IEEE80211_HE_PHY_CAP0_CHANNEL_WIDTH_SET_40MHZ_80MHZ_IN_5G))
 			return false;
 		if (chandef->center_freq1 < control_freq &&
 		    chandef->chan->flags & IEEE80211_CHAN_NO_HT40MINUS)
@@ -931,29 +939,37 @@ bool cfg80211_chandef_usable(struct wiphy *wiphy,
 		break;
 	case NL80211_CHAN_WIDTH_80P80:
 		cap = vht_cap->cap & IEEE80211_VHT_CAP_SUPP_CHAN_WIDTH_MASK;
-		if (chandef->chan->band != NL80211_BAND_6GHZ &&
+		if (!is_6ghz_chan &&
 		    cap != IEEE80211_VHT_CAP_SUPP_CHAN_WIDTH_160_80PLUS80MHZ)
 			return false;
-		/* fall through */
+		if (is_6ghz_chan &&
+		    !(he_cap->he_cap_elem.phy_cap_info[0] &
+		    IEEE80211_HE_PHY_CAP0_CHANNEL_WIDTH_SET_80PLUS80_MHZ_IN_5G))
+			return false;
 	case NL80211_CHAN_WIDTH_80:
+		if (!vht_cap->vht_supported && !is_6ghz_chan)
+			return false;
+		if (is_6ghz_chan &&
+		    !(he_cap->he_cap_elem.phy_cap_info[0] &
+		    IEEE80211_HE_PHY_CAP0_CHANNEL_WIDTH_SET_40MHZ_80MHZ_IN_5G))
+			return false;
 		prohibited_flags |= IEEE80211_CHAN_NO_80MHZ;
 		width = 80;
-		if (chandef->chan->band == NL80211_BAND_6GHZ)
-			break;
-		if (!vht_cap->vht_supported)
-			return false;
 		break;
 	case NL80211_CHAN_WIDTH_160:
-		prohibited_flags |= IEEE80211_CHAN_NO_160MHZ;
-		width = 160;
-		if (chandef->chan->band == NL80211_BAND_6GHZ)
-			break;
-		if (!vht_cap->vht_supported)
+		if (!vht_cap->vht_supported && !is_6ghz_chan)
 			return false;
 		cap = vht_cap->cap & IEEE80211_VHT_CAP_SUPP_CHAN_WIDTH_MASK;
-		if (cap != IEEE80211_VHT_CAP_SUPP_CHAN_WIDTH_160MHZ &&
+		if (!is_6ghz_chan &&
+		    cap != IEEE80211_VHT_CAP_SUPP_CHAN_WIDTH_160MHZ &&
 		    cap != IEEE80211_VHT_CAP_SUPP_CHAN_WIDTH_160_80PLUS80MHZ)
 			return false;
+		if (is_6ghz_chan &&
+		    !(he_cap->he_cap_elem.phy_cap_info[0] &
+		    IEEE80211_HE_PHY_CAP0_CHANNEL_WIDTH_SET_160MHZ_IN_5G))
+			return false;
+		prohibited_flags |= IEEE80211_CHAN_NO_160MHZ;
+		width = 160;
 		break;
 	default:
 		WARN_ON_ONCE(1);

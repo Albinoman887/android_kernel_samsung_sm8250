@@ -154,6 +154,11 @@ struct ufs_dev_fix {
  */
 #define UFS_DEVICE_QUIRK_WAIT_AFTER_REF_CLK_UNGATE	(1 << 11)
 
+/*
+ * Some UFS devices support the FATAL MODE
+ * to gether the debug info.
+ */
+#define UFS_DEVICE_QUIRK_SUPPORT_QUERY_FATAL_MODE	(1 << 12)
 
 /*
  * Few samsung UFS device models advertise PA_HIBERN8TIME as
@@ -162,7 +167,6 @@ struct ufs_dev_fix {
  * To workaround this issue, host should set its PA_HIBERN8TIME time to
  * 300us even if device advertises PA_HIBERN8TIME of 200us.
  */
-#define UFS_DEVICE_QUIRK_PA_HIBER8TIME   (1 << 12)
-
+#define UFS_DEVICE_QUIRK_PA_HIBER8TIME   (1 << 13)
 
 #endif /* UFS_QUIRKS_H_ */
