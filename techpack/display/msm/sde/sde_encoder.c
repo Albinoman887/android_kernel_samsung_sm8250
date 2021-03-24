@@ -3261,7 +3261,7 @@ static void _sde_encoder_input_handler_register(
 	}
 }
 
-#if !defined(CONFIG_DISPLAY_SAMSUNG) /* CL 16617782 : Excessive delay in setPowerMode because of pending display off */
+//#if !defined(CONFIG_DISPLAY_SAMSUNG) /* CL 16617782 : Excessive delay in setPowerMode because of pending display off */
 static void _sde_encoder_input_handler_unregister(
 		struct drm_encoder *drm_enc)
 {
@@ -3276,7 +3276,7 @@ static void _sde_encoder_input_handler_unregister(
 	}
 
 }
-#endif
+//#endif
 
 static int _sde_encoder_input_handler(
 		struct sde_encoder_virt *sde_enc)
@@ -3570,11 +3570,11 @@ static void sde_encoder_virt_disable(struct drm_encoder *drm_enc)
 	/* wait for idle */
 	sde_encoder_wait_for_event(drm_enc, MSM_ENC_TX_COMPLETE);
 
-/*
-#if !defined(CONFIG_DISPLAY_SAMSUNG) /* CL 16617782 : Excessive delay in setPowerMode because of pending display off
+
+//#if !defined(CONFIG_DISPLAY_SAMSUNG) /* CL 16617782 : Excessive delay in setPowerMode because of pending display off
 	_sde_encoder_input_handler_unregister(drm_enc);
-#endif
-*/
+//#endif
+
 
 	if (sde_enc->input_handler && sde_enc->input_handler_registered &&
 		sde_encoder_check_curr_mode(drm_enc, MSM_DISPLAY_CMD_MODE)) {
