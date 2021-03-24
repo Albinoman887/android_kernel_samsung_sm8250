@@ -2266,6 +2266,7 @@ int __udp4_lib_rcv(struct sk_buff *skb, struct udp_table *udptable,
 	sk = skb_steal_sock(skb);
 	if (sk) {
 		struct dst_entry *dst = skb_dst(skb);
+		int ret;
 #ifdef CONFIG_KNOX_NCM
 		// KNOX NPA - START
 		struct nf_conn *ct = NULL;
