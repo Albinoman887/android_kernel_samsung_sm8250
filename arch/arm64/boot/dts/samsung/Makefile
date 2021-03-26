@@ -29,6 +29,8 @@ dts-dirs += x1q
 dts-dirs += y2q
 dts-dirs += z3q
 
+dts-dirs += c2q
+
 
 
 always          := $(dtb-y)
