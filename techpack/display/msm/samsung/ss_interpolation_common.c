@@ -260,7 +260,6 @@ static void update_hbm_candela_map_table(struct samsung_display_driver_data *vdd
 	table->max_lv = table->end[table->tab_size-1];
 }
 
-
 static void update_hbm_interpolation(struct samsung_display_driver_data *vdd,
 		struct brightness_table *br_tbl,
 		struct ss_interpolation_brightness_table *hbm_table, int hbm_table_size)
@@ -661,10 +660,10 @@ int gen_normal_interpolation_aor_gamma_legacy(struct samsung_display_driver_data
 		}
 		dimming_mode_prev = dimming_mode_curr;
 
-		/* AOR/GAMMA interpolation steps 
+		/* AOR/GAMMA interpolation steps
 		 * Do interpoation for all aor/gamma of step.
 		 */
-		
+
 		for (step = 0; step < normal_table[loop].steps; step++) {
 			platform_curr = normal_itp->br_aor_table[index].platform_level_x10000;
 
@@ -738,7 +737,7 @@ static int gen_normal_interpolation_aor_gamma(struct samsung_display_driver_data
 	long long platform_up, platform_down, platform_curr;
 	long long aor_hex_up, aor_hex_down, aor_hex_next_up, aor_hex_cnt;
 	long long aor_dec_up_x10000, aor_dec_down_x10000, aor_dec_curr_x10000;
-	enum ss_dimming_mode dimming_mode_curr = DIMMING_MODE_MAX;		
+	enum ss_dimming_mode dimming_mode_curr = DIMMING_MODE_MAX;
 	unsigned int aor_size = vdd->br_info.aor_size;
 	struct dimming_tbl *normal_tbl = &br_tbl->normal_tbl;
 
@@ -866,7 +865,7 @@ static int gen_normal_interpolation_aor_gamma(struct samsung_display_driver_data
 
 		dimming_mode_curr = DIMMING_MODE_MAX;
 
-		/* AOR/GAMMA interpolation steps 
+		/* AOR/GAMMA interpolation steps
 		 * Do interpoation for all aor/gamma of step.
 		 */
 		for (step = 0; step < normal_table[loop].steps; step++) {
@@ -886,12 +885,12 @@ static int gen_normal_interpolation_aor_gamma(struct samsung_display_driver_data
 					itp_gammaV[gamma_loop] = gamma_interpolation(
 									max_gammaV[gamma_loop], min_gammaV[gamma_loop],
 									max_cd, min_cd,
-									normal_itp->br_aor_table[index].interpolation_br_x10000);						
+									normal_itp->br_aor_table[index].interpolation_br_x10000);
 				}
 
 				/* Make GAMMA reg packet format from V format */
 				vdd->panel_func.convert_V_to_GAMMA(itp_gammaV, normal_itp->gamma[index]);
-			
+
 				/* A_DIMMING */
 				aor_dec_curr_x10000 = A_DIMMING_AOR_CAL (
 						aor_dec_up_x10000, aor_dec_down_x10000,
@@ -919,7 +918,7 @@ static int gen_normal_interpolation_aor_gamma(struct samsung_display_driver_data
 			memset(pBuffer, 0x00, 256);
 
 			index++;
-		}		
+		}
 	}
 
 	kfree(max_gammaV);
@@ -1282,6 +1281,10 @@ int br_interpolation_generate_event(struct samsung_display_driver_data *vdd,
 
 	/* select brightness table for current refresh rate mode */
 	br_tbl = ss_get_cur_br_tbl(vdd);
+	if (!br_tbl) {
+		LCD_ERR("br tble is null!\n");
+		return -ENODEV;
+	}
 
 	hbm_tbl = &br_tbl->hbm_tbl;
 	normal_tbl = &br_tbl->normal_tbl;
@@ -1677,7 +1680,7 @@ static void debug_normal_interpolation(struct samsung_display_driver_data *vdd,
 		if (!IS_ERR_OR_NULL(normal_itp->br_aor_table)) {
 			for (data_cnt = 0; data_cnt < aor_size; data_cnt++)
 				snprintf(buf + strlen(buf), FLASH_GAMMA_DBG_BUF_SIZE - strlen(buf), "%02x ", normal_itp->br_aor_table[column].aor_hex_string[data_cnt]);
-		} else 
+		} else
 			LCD_ERR("aor_table is null.. %d", column);
 
 		snprintf(buf + strlen(buf), FLASH_GAMMA_DBG_BUF_SIZE - strlen(buf), "| ");
@@ -1760,7 +1763,7 @@ static void debug_hbm_interpolation(struct samsung_display_driver_data *vdd,
 		}
 
 		snprintf(buf + strlen(buf), FLASH_GAMMA_DBG_BUF_SIZE - strlen(buf), "| ");
- 
+
 		/* IRC */
 		if (!IS_ERR_OR_NULL(irc)) {
 			for (data_cnt = 0; data_cnt < irc_size; data_cnt++)
@@ -1805,7 +1808,7 @@ uint gamma_interpolation(int upper_g, int lower_g, int upper_cd, int lower_cd, i
 {
 	uint ret = 0;
 
-	ret = (upper_g * MULTIPLY_x10000) - 
+	ret = (upper_g * MULTIPLY_x10000) -
 		((upper_cd * MULTIPLY_x10000 - target_cd) * (upper_g - lower_g)) /
 		(upper_cd - lower_cd);
 	ret = ROUNDING(ret, MULTIPLY_x10000);
@@ -1818,7 +1821,7 @@ int ss_common_interpolation(s64 y2, s64 y1, s64 x2, s64 x1, s64 target_x)
 {
 	s64 itp_v;
 
-	itp_v = (y2 * MULTIPLY_x10000) - 
+	itp_v = (y2 * MULTIPLY_x10000) -
 		((x2 - target_x) * (y2 - y1) * MULTIPLY_x10000) /
 		(x2 - x1);
 	itp_v = ROUNDING(itp_v, MULTIPLY_x10000);

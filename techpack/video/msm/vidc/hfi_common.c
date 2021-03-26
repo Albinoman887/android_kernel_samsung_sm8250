@@ -142,7 +142,7 @@ struct venus_hfi_vpu_ops ar50_lite_ops = {
 	.prepare_pc = __prepare_pc_ar50_lt,
 	.raise_interrupt = __raise_interrupt_ar50_lt,
 	.watchdog = __watchdog_common,
-	.noc_error_info = NULL,
+	.noc_error_info = __noc_error_info_common,
 	.core_clear_interrupt = __core_clear_interrupt_ar50_lt,
 	.boot_firmware = __boot_firmware_ar50_lt,
 };
@@ -2060,6 +2060,12 @@ static int venus_hfi_core_init(void *device)
 	rc = call_venus_op(dev, boot_firmware, dev, DEFAULT_SID);
 	if (rc) {
 		d_vpr_e("Failed to start core\n");
+
+// Add kernel panic to detect venus f/w booting fail issue (P200303-00945) 
+#ifdef CONFIG_SEC_FACTORY
+		panic("[vidc] venus f/w booting fail issue : Failed to start core\n");
+#endif
+
 		rc = -ENODEV;
 		goto err_core_init;
 	}
@@ -3105,11 +3111,6 @@ static void print_sfr_message(struct venus_hfi_device *device)
 
 	vsfr = (struct hfi_sfr_struct *)device->sfr.align_virtual_addr;
 	if (vsfr) {
-		if (vsfr->bufSize != device->sfr.mem_size) {
-			d_vpr_e("Invalid SFR buf size %d actual %d\n",
-				vsfr->bufSize, device->sfr.mem_size);
-			return;
-		}
 		vsfr_size = vsfr->bufSize - sizeof(u32);
 		p = memchr(vsfr->rg_data, '\0', vsfr_size);
 		/* SFR isn't guaranteed to be NULL terminated */
@@ -3984,7 +3985,6 @@ static int __protect_cp_mem(struct venus_hfi_device *device)
 	memprot.cp_nonpixel_start = 0x0;
 	memprot.cp_nonpixel_size = 0x0;
 
-	mutex_lock(&device->res->cb_lock);
 	list_for_each_entry(cb, &device->res->context_banks, list) {
 		if (!strcmp(cb->name, "venus_ns")) {
 			desc.args[1] = memprot.cp_size =
@@ -4003,7 +4003,6 @@ static int __protect_cp_mem(struct venus_hfi_device *device)
 				memprot.cp_nonpixel_size);
 		}
 	}
-	mutex_unlock(&device->res->cb_lock);
 
 	desc.arginfo = SCM_ARGS(4);
 	rc = scm_call2(SCM_SIP_FNID(SCM_SVC_MP,

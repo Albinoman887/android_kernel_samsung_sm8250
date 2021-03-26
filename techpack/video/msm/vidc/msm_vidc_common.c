@@ -1995,9 +1995,19 @@ void msm_comm_validate_output_buffers(struct msm_vidc_inst *inst)
 {
 	struct internal_buf *binfo;
 	u32 buffers_owned_by_driver = 0;
-	struct msm_vidc_format *fmt;
+	struct hal_buffer_requirements *dpb = NULL;
+	u32 i;
 
-	fmt = &inst->fmts[OUTPUT_PORT];
+	for (i = 0; i < HAL_BUFFER_MAX; i++) {
+		if (inst->buff_req.buffer[i].buffer_type == HAL_BUFFER_OUTPUT) {
+			dpb = &inst->buff_req.buffer[i];
+			break;
+		}
+	}
+	if (!dpb) {
+		s_vpr_e(inst->sid, "Couldn't retrieve dpb buf req\n");
+		return;
+	}
 
 	mutex_lock(&inst->outputbufs.lock);
 	if (list_empty(&inst->outputbufs.list)) {
@@ -2016,11 +2026,10 @@ void msm_comm_validate_output_buffers(struct msm_vidc_inst *inst)
 	}
 	mutex_unlock(&inst->outputbufs.lock);
 
-	/* Only minimum number of DPBs are allocated */
-	if (buffers_owned_by_driver != fmt->count_min) {
+	if (buffers_owned_by_driver != dpb->buffer_count_actual) {
 		s_vpr_e(inst->sid, "OUTPUT Buffer count mismatch %d of %d\n",
 			buffers_owned_by_driver,
-			fmt->count_min);
+			dpb->buffer_count_actual);
 		msm_vidc_handle_hw_error(inst->core);
 	}
 }
@@ -5797,29 +5806,26 @@ int msm_comm_check_memory_supported(struct msm_vidc_inst *vidc_inst)
 	struct msm_vidc_format *fmt;
 	struct v4l2_format *f;
 	struct hal_buffer_requirements *req;
-	struct context_bank_info *cb = NULL;
 	u32 i, dpb_cnt = 0, dpb_size = 0, rc = 0;
-	u32 inst_mem_size, non_sec_cb_size = 0;
-	u64 total_mem_size = 0, non_sec_mem_size = 0;
+	u64 mem_size = 0;
 	u32 memory_limit_mbytes;
 
 	core = vidc_inst->core;
 
 	mutex_lock(&core->lock);
 	list_for_each_entry(inst, &core->instances, list) {
-		inst_mem_size = 0;
 		/* input port buffers memory size */
 		fmt = &inst->fmts[INPUT_PORT];
 		f = &fmt->v4l2_fmt;
 		for (i = 0; i < f->fmt.pix_mp.num_planes; i++)
-			inst_mem_size += f->fmt.pix_mp.plane_fmt[i].sizeimage *
+			mem_size += f->fmt.pix_mp.plane_fmt[i].sizeimage *
 							fmt->count_actual;
 
 		/* output port buffers memory size */
 		fmt = &inst->fmts[OUTPUT_PORT];
 		f = &fmt->v4l2_fmt;
 		for (i = 0; i < f->fmt.pix_mp.num_planes; i++)
-			inst_mem_size += f->fmt.pix_mp.plane_fmt[i].sizeimage *
+			mem_size += f->fmt.pix_mp.plane_fmt[i].sizeimage *
 							fmt->count_actual;
 
 		/* dpb buffers memory size */
@@ -5836,47 +5842,27 @@ int msm_comm_check_memory_supported(struct msm_vidc_inst *vidc_inst)
 			}
 			dpb_cnt = dpb.buffer_count_actual;
 			dpb_size = dpb.buffer_size;
-			inst_mem_size += dpb_cnt * dpb_size;
+			mem_size += dpb_cnt * dpb_size;
 		}
 
 		/* internal buffers memory size */
 		for (i = 0; i < HAL_BUFFER_MAX; i++) {
 			req = &inst->buff_req.buffer[i];
 			if (is_internal_buffer(req->buffer_type))
-				inst_mem_size += req->buffer_size *
+				mem_size += req->buffer_size *
 						req->buffer_count_actual;
 		}
-
-		if (!is_secure_session(inst))
-			non_sec_mem_size += inst_mem_size;
-		total_mem_size += inst_mem_size;
 	}
 	mutex_unlock(&core->lock);
 
 	memory_limit_mbytes = msm_comm_get_memory_limit(core);
 
-	if ((total_mem_size >> 20) > memory_limit_mbytes) {
+	if ((mem_size >> 20) > memory_limit_mbytes) {
 		s_vpr_e(vidc_inst->sid,
 			"%s: video mem overshoot - reached %llu MB, max_limit %llu MB\n",
-			__func__, total_mem_size >> 20, memory_limit_mbytes);
-		msm_comm_print_insts_info(core);
+			__func__, mem_size >> 20, memory_limit_mbytes);
+		msm_comm_print_mem_usage(core);
 		return -EBUSY;
-	}
-
-	if (!is_secure_session(vidc_inst)) {
-		mutex_lock(&core->resources.cb_lock);
-		list_for_each_entry(cb, &core->resources.context_banks, list)
-			if (!cb->is_secure)
-				non_sec_cb_size = cb->addr_range.size;
-		mutex_unlock(&core->resources.cb_lock);
-
-		if (non_sec_mem_size > non_sec_cb_size) {
-			s_vpr_e(vidc_inst->sid,
-				"%s: insufficient device addr space, required %llu, available %llu\n",
-				__func__, non_sec_mem_size, non_sec_cb_size);
-			msm_comm_print_insts_info(core);
-			return -EINVAL;
-		}
 	}
 
 	return 0;
@@ -6395,23 +6381,6 @@ void msm_comm_print_inst_info(struct msm_vidc_inst *inst)
 				cbuf->buf.index, cbuf->buf.fd, cbuf->buf.offset,
 				cbuf->buf.size, cbuf->smem.device_addr);
 	mutex_unlock(&inst->cvpbufs.lock);
-}
-
-void msm_comm_print_insts_info(struct msm_vidc_core *core)
-{
-	struct msm_vidc_inst *inst = NULL;
-
-	if (!core) {
-		d_vpr_e("%s: invalid params\n", __func__);
-		return;
-	}
-
-	msm_comm_print_mem_usage(core);
-
-	mutex_lock(&core->lock);
-	list_for_each_entry(inst, &core->instances, list)
-		msm_comm_print_inst_info(inst);
-	mutex_unlock(&core->lock);
 }
 
 int msm_comm_session_continue(void *instance)
