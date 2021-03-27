@@ -225,7 +225,6 @@ static int __init enforcing_setup(char *str)
 		selinux_enforcing_boot = enforcing ? 1 : 0;
 		selinux_enforcing = enforcing ? 1 : 0;
 #endif
-	}
 // ] SEC_SELINUX_PORTING_COMMON
 	}
 	return 1;
